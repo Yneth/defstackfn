@@ -14,5 +14,12 @@
             (.get thread-local)))]
     this))
 
-(defn to-map [keys values]
-  (into {} (map vector keys values)))
+(defn scan [s-exp-list]
+  (if-not (empty? s-exp-list)
+    (reductions
+      (fn [[exp history :as acc] x]
+        [x (conj history exp)])
+      [(first s-exp-list) []]
+      (next s-exp-list))
+    #_else
+    []))

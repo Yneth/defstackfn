@@ -1,282 +1,226 @@
 (ns defstackfn.core
-  (:require [clojure.string :as cstr]
+  (:require [clojure.test :refer :all]
+            [clojure.string :as cstr]
             [defstackfn.util :as util])
-  (:import (java.io PushbackReader StringReader)))
+  (:import (clojure.lang Symbol IPersistentCollection ExceptionInfo)))
 
-(defonce ^:private debug
+(defonce macro-debug-enabled
   (util/mk-thread-local false))
 
-(defn- literal? [exp]
-  (or
-    (number? exp)
-    (string? exp)
-    (boolean? exp)
-    (nil? exp)))
+(defonce runtime-debug-enabled
+  (util/mk-thread-local false))
 
-(defn- stack-pop? [exp]
-  (= '<pop> exp))
+(defn state->stack-push [state val]
+  (update state :stack
+    (fn [stack]
+      (if (= ::nil stack)
+        (list val)
+        (conj stack val)))))
 
-(defn- stack-push-var? [exp]
+(defn state->stack-pop [state]
+  (update state :stack
+    (fn [stack]
+      (cond
+        (= ::nil stack)
+        ::nil
+
+        (= 1 (count stack))
+        ::nil
+
+        :else
+        (rest stack)))))
+
+(defn state->stack-pop-multi [state n]
+  (reduce
+    (fn [acc _]
+      (state->stack-pop acc))
+    state
+    (range n)))
+
+(defn state->stack-take [state n]
+  (let [stack (get state :stack)]
+    (if (= ::nil stack)
+      (list)
+      (take n stack))))
+
+(defn state->get-stack-head [state]
+  (let [stack (get state :stack)]
+    (if (= ::nil stack)
+      stack
+      (first stack))))
+
+(defn state->get-var [state var-name]
+  (get-in state [:vars var-name]))
+
+(defn state->define-var [state var-name]
+  (let [var-value (state->get-stack-head state)]
+    (update state :vars assoc var-name var-value)))
+
+(defmulti ->statement (fn [exp opts] (class exp)))
+(defmulti symbol->statement (fn [exp opts] exp))
+(defmulti list->statement (fn [exp opts] (first exp)))
+
+(defmethod ->statement Symbol [exp opts]
+  (symbol->statement exp opts))
+
+(defmethod ->statement IPersistentCollection [exp opts]
+  (list->statement exp opts))
+
+(defmethod ->statement :default [exp opts]
+  `(fn [state#]
+     (state->stack-push state# ~exp)))
+
+(defmethod symbol->statement '<pop> [exp opts]
+  `(fn [state#]
+     (let [head# (state->get-stack-head state#)]
+       (when (= ::nil head#)
+         (throw (ex-info "Failed to pop empty stack" {:exp '~exp :opts '~opts}))))
+
+     (state->stack-pop state#)))
+
+(defn define-var? [sym]
+  (let [n (name sym)]
+    (and
+      (cstr/starts-with? n "!")
+      (cstr/ends-with? n "+"))))
+
+(defn push-var? [sym]
   (and
-    (symbol? exp)
-    (let [n (name exp)]
-      (and (cstr/starts-with? n "!")
-           (not (cstr/ends-with? n "+"))))))
+    (cstr/starts-with? (name sym) "!")
+    (not (define-var? sym))))
 
-(defn- define-var? [exp]
-  (and
-    (symbol? exp)
-    (let [n (name exp)]
-      (and (cstr/starts-with? n "!")
-           (cstr/ends-with? n "+")))))
+(defn format-var [sym]
+  (let [n (name sym)]
+    (symbol (subs n 0 (dec (count n))))))
 
-(defn- invoke? [exp]
-  (and
-    (coll? exp)
-    (= 'invoke> (first exp))))
+(defmethod symbol->statement :default [exp opts]
+  (when-not (or (push-var? exp) (define-var? exp))
+    (throw (ex-info (str "Found invalid symbol: " exp) {:exp exp :opts opts})))
 
-(defn- invoke-cljfn? [exp]
-  (and
-    (invoke? exp)
-    (let [[_ fname] exp]
-      (if (and (coll? fname) (= 'fn* (first fname)))
-        (throw (ex-info "Anonymous functions are not supported" {}))
-        (some? (resolve fname))))))
+  (cond
+    (define-var? exp)
+    `(fn [state#]
+       (state->define-var state# (format-var '~exp)))
 
-(defn- invoke-stackfn? [exp]
-  (and
-    (invoke? exp)
-    (let [[_ fname] exp]
-      (symbol? fname))))
+    (push-var? exp)
+    `(fn [state#]
+       (state->stack-push state# (state->get-var state# '~exp)))))
 
-(defn- >empty? [vstack!]
-  (empty? @vstack!))
+(defmethod list->statement 'invoke> [exp opts]
+  (let [[_ f arg-count] exp]
+    `(fn [state#]
+       (let [args#          (state->stack-take state# ~arg-count)
+             updated-state# (state->stack-pop-multi state# ~arg-count)
+             result#        (apply ~f args#)]
+         (when (< (count args#) ~arg-count)
+           (throw (ex-info (str "Stack exhausted, expected to have " ~arg-count
+                                " arguments, was " (count args#))
+                           {:exp '~exp :opts '~opts})))
+         (state->stack-push updated-state# result#)))))
 
-(defn- >push [vstack! v]
-  (vswap! vstack! #(cons v %)))
+(defn ->logging-statement [exp opts]
+  `(fn [state#]
+     (println '~exp state# '~opts)
+     state#))
 
-(defn- >peek [vstack!]
-  (first @vstack!))
+(defn do-to-statements [s-exp-list]
+  (->> s-exp-list
+       (util/scan)
+       (mapcat
+         (fn [[exp# history#]]
+           (let [opts# {:history history#}]
+             (when (macro-debug-enabled)
+               (println "unfolding statement:" exp# \newline history#))
 
-(defn- >pop [vstack!]
-  (when (>empty? vstack!)
-    (throw (ex-info "Failed to pop, empty stack" {})))
+             (cond-> [(seq [(->statement exp# opts#)])]
 
-  (let [val (>peek vstack!)]
-    (vswap! vstack! #(drop 1 %))
-    val))
+                     (runtime-debug-enabled)
+                     (conj (seq [(->logging-statement exp# opts#)]))))))))
 
-(defn- >pop-safe [vstack!]
-  (when (>peek vstack!)
-    (>pop vstack!)))
+(defn to-statements [s-exp-list]
+  (when (macro-debug-enabled)
+    (println "unfold started"))
+  (let [result (do-to-statements s-exp-list)]
+    (when (macro-debug-enabled)
+      (println "unfold completed"))
+    result))
 
-(defn- validate-invoke [vstack! exp]
-  (when-not (nth exp 1 nil)
-    (throw (ex-info "Failed to invoke, unknown function name: " exp {})))
+(defmethod list->statement 'if> [exp opts]
+  (let [body
+        (rest exp)
 
-  (when-not (nth exp 2 nil)
-    (throw (ex-info "Failed to invoke, invalid argument count: " exp {})))
+        if-statements
+        (to-statements
+          (take-while #(not= 'else> %) body))
 
-  (when-not (>= (count @vstack!) (nth exp 2))
-    (throw (ex-info (str "Not enough values in stack to invoke: " (second exp)
-                         ", needed " (nth exp 2) " was " (count @vstack!)) {}))))
+        else-statements
+        (to-statements
+          (drop 1 (drop-while #(not= 'else> %) body)))]
 
-(defn- >invoke-clj-fn [vstack! exp]
-  (validate-invoke vstack! exp)
-  (let [[_ fsymbol arg-count] exp
+    `(fn [state#]
+       (let [stack-head#
+             (state->get-stack-head state#)
 
-        resolved-clj-fn (resolve fsymbol)
-        args            (take arg-count @vstack!)]
+             updated-state#
+             (state->stack-pop state#)]
+         (cond
+           (= ::nil stack-head#)
+           (throw (ex-info "Failed to execute if, empty stack"
+                           {:exp '~exp :opts '~opts}))
 
-    (dotimes [_ arg-count] (>pop vstack!))
-    (>push vstack! (apply resolved-clj-fn args))))
+           stack-head#
+           (-> updated-state#
+               ~@if-statements)
 
-(defn resolve-fn [vctx! fsymbol]
-  (let [res (get @vctx! fsymbol)]
-    (when-not res
-      (throw (ex-info (str "Encountered non-existent function: " fsymbol) {})))
-    res))
+           :else
+           (-> updated-state#
+               ~@else-statements))))))
 
-(defn- resolve-var [vvars! params exp]
-  (let [local-var (get @vvars! exp ::nil)
-        fn-var    (get params exp ::nil)]
+(defn format-exception-message [header-message name args-map-or-list ^Exception e]
+  (let [{:keys [exp opts]}
+        (ex-data e)
 
-    (when (and (= ::nil local-var) (= ::nil fn-var))
-      (throw (ex-info (str "Failed to resolve var: " exp) {})))
+        history
+        (get opts :history)
 
-    (if (not= ::nil local-var)
-      local-var
-      fn-var)))
+        header
+        (str header-message name " " args-map-or-list)
 
-(defn- >invoke-stack-fn [vstack! interp-fn vctx! exp]
-  (validate-invoke vstack! exp)
-  (let [[_ fsymbol arg-count] exp
+        footer
+        (str exp \newline
+             "^^^^^^^^" \newline
+             (.getMessage e))
 
-        resolved-stack-fn (resolve-fn vctx! fsymbol)
+        message
+        (cstr/join
+          \newline
+          (concat
+            [""]
+            [header]
+            history
+            [footer]))]
+    message))
 
-        param-keys        (get resolved-stack-fn :params)
-        param-vals        (take arg-count @vstack!)
-        param-map         (util/to-map param-keys param-vals)
-        result            (interp-fn param-map vctx! (:body resolved-stack-fn))]
-    (>push vstack! result)))
+(defn format-runtime-exception [name args-map ^ExceptionInfo e]
+  (ex-info (format-exception-message "Failed to invoke: " name args-map e) {} e))
 
-(defn- >define-var [vvars! vstack! exp]
-  (let [var-name (cstr/replace (name exp) #"\+$" "")]
-    (vswap! vvars! assoc (symbol var-name) (>peek vstack!))))
+(defn format-compile-exception [name args ^ExceptionInfo e]
+  (ex-info (format-exception-message "Failed to compile: " name args e) {}))
 
-(defn- if? [exp]
-  (and
-    (coll? exp)
-    (= 'if> (first exp))))
-
-(defn- else? [exp]
-  (= 'else> exp))
-
-(defn- try-add-next-call-stack [vcall-stack! type vnext!]
-  (when @vnext!
-    (>push vcall-stack! {:type type :next @vnext!})))
-
-(defn- interpret-function-body [params vctx! s-exp]
-  (let [this           interpret-function-body
-
-        vvars!         (volatile! {})
-        vstack!        (volatile! [])
-        vcall-stack!   (volatile! [])
-        vnext-exp!     (volatile! nil)
-
-        do-resolve-var (partial resolve-var vvars! params)
-
-        set-next!      (fn [next]
-                         (let [next-or-eof
-                               (if (empty? next) [::eof] #_:else next)]
-                           (vreset! vnext-exp! next-or-eof)))]
-    (loop [s-exp-iter s-exp]
-      (let [exp (first s-exp-iter)]
-
-        (when-not (= ::eof exp)
-          (set-next! (rest s-exp-iter)))
-
-        (cond
-          (= ::eof exp) nil
-          (literal? exp) (>push vstack! exp)
-          (stack-push-var? exp) (>push vstack! (do-resolve-var exp))
-          (stack-pop? exp) (>pop vstack!)
-          (define-var? exp) (>define-var vvars! vstack! exp)
-          (invoke-cljfn? exp) (>invoke-clj-fn vstack! exp)
-          (invoke-stackfn? exp) (>invoke-stack-fn vstack! this vctx! exp)
-
-          (if? exp)
-          (if (>pop vstack!)
-            (do
-              (try-add-next-call-stack vcall-stack! :if-branch vnext-exp!)
-              (set-next! (rest exp)))
-            #_:else
-            (do
-              (try-add-next-call-stack vcall-stack! :else-branch vnext-exp!)
-              (let [else-exp (drop-while (complement else?) exp)]
-                (set-next! (rest else-exp)))))
-
-          (else? exp)
-          (cond
-            (>empty? vcall-stack!)
-            (throw (ex-info "Else expression without if" {}))
-
-            (= :if-branch (:type (>peek vcall-stack!)))
-            (set-next! (:next @vcall-stack!)))
-
-
-          :else (throw (ex-info (str "Unknown expression: " exp) {})))
-
-        (if (and (debug) (not= ::eof exp))
-          (prn exp @vstack!))
-
-        (cond
-          (not (= ::eof exp))
-          (recur @vnext-exp!)
-
-          (not (>empty? vcall-stack!))
-          (recur (:next (>pop-safe vcall-stack!)))
-
-          :else
-          nil)))
-
-    (>peek vstack!)))
-
-(defn- register-defstackfn [v-fn-ctx! s-exp]
-  (try
-    (let [[name params & rest-s-exp] s-exp]
-      (when-not (symbol? name)
-        (throw (ex-info (str "Invalid function name: " name)
-                        {:exp s-exp :ctx v-fn-ctx!})))
-
-      (when-not (coll? params)
-        (throw (ex-info (str "Invalid function arguments, function: " name ", args: " params)
-                        {:exp s-exp :ctx v-fn-ctx!})))
-
-      (vswap! v-fn-ctx! assoc
-              name
-              {:name   name
-               :params params
-               :body   rest-s-exp}))
-    (catch Exception e
-      (throw (ex-info "Failed to register function" {} e)))))
-
-(defn- interpret-function-call [vfn-ctx! fname param-vals]
-  (let [resolved-f (resolve-fn vfn-ctx! fname)
-        param-keys (:params resolved-f)]
-
-    (when-not (= (count param-vals) (count param-keys))
-      (throw (ex-info (str "Invalid argument count, function: " fname ", expected: "
-                           (count param-keys) " was " (count param-vals)) {})))
-
+(defmacro defstackfn [& body]
+  (let [[name args & s-exps] body]
     (try
-      (interpret-function-body
-        (util/to-map param-keys param-vals)
-        vfn-ctx!
-        (:body resolved-f))
-      (catch Exception e
-        (throw (ex-info (str "Failure during invocation of function: " fname) {} e))))))
-
-(defn- do-interpret [s-exp]
-  (let [vfn-ctx!      (volatile! {})
-        vcall-stack!  (volatile! [])
-        vlast-result! (volatile! nil)]
-    (loop [exp-iter s-exp]
-      (let [curr  (first exp-iter)
-            other (rest exp-iter)]
-        (cond
-          (nil? curr)
-          @vlast-result!
-
-          ; interpret defstackfn or function call
-          (coll? curr)
-          (do
-            (>push vcall-stack! other)
-            (recur curr))
-
-          (= curr 'defstackfn)
-          (do
-            (vreset! vlast-result! (:name (register-defstackfn vfn-ctx! other)))
-            (recur (>pop-safe vcall-stack!)))
-
-          :else
-          (do
-            (vreset! vlast-result! (interpret-function-call vfn-ctx! curr other))
-            (recur (>pop-safe vcall-stack!))))))))
-
-(defn interpret [s-exp & [{:keys [debug?]
-                           :or   {debug? false}}]]
-  (debug :set debug?)
-  (try
-    (do-interpret s-exp)
-    (catch Exception e
-      (throw (ex-info "Failed to interpret" {} e)))))
-
-(defn read-all-s-exps [str]
-  (let [rdr (PushbackReader. (StringReader. str))]
-    (take-while
-      #(not= % ::eof)
-      (repeatedly #(read {:eof ::eof} rdr)))))
-
-(defn interpret-str [str & [opts]]
-  (interpret (read-all-s-exps str) opts))
+      `(defn ~name ~args
+         (let [args-map# (zipmap '~args ~args)]
+           (try
+             (->
+               {:stack ::nil
+                :vars  args-map#}
+               ~@(to-statements s-exps)
+               (state->get-stack-head))
+             (catch ExceptionInfo e#
+               (throw (format-runtime-exception '~name args-map# e#)))
+             (catch Exception e#
+               (throw (IllegalStateException. "Unhandled exception" e#))))))
+      (catch ExceptionInfo e
+        (throw (format-compile-exception name args e))))))

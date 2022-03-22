@@ -1,171 +1,185 @@
 (ns defstackfn.core-test
   (:require [clojure.test :refer :all]
-            [defstackfn.core :refer :all])
-  (:import (clojure.lang ExceptionInfo)))
+            [defstackfn.core :refer :all]
+            [clojure.string :as cstr])
+  (:import (clojure.lang ArityException ExceptionInfo)))
 
-(deftest test-read-all-s-exps
-  (testing "base case"
-    (is (= '((defstackfn name [] 1))
-           (read-all-s-exps "(defstackfn name [] 1)"))))
+; (runtime-debug-enabled :set true)
 
-  (testing "multi object"
-    (is (= '((defstackfn name [] 1) (name))
-           (read-all-s-exps "(defstackfn name [] 1) (name)")))))
+(deftest literal-tests
+  (testing "should return const head"
+    (defstackfn const1 [] 1)
+    (is (= 1 (const1))))
 
-(deftest test-interpret
+  (testing "should return const head"
+    (defstackfn const-str [] "1")
+    (is (= "1" (const-str)))))
 
+(deftest arg-tests
+  (testing "should accept args"
+    (defstackfn const100 [!a] !a)
+    (is (= 100 (const100 100))))
 
-  (testing "should execute function"
-    (is (nil? (interpret '((defstackfn name [])
-                           (name))))))
+  (testing "should fail if invalid arg count"
+    (defstackfn >tuple [!a !b]
+                !b
+                !a
+                (invoke> vector 2))
+    (is (thrown? ArityException (>tuple 1)))))
 
-  (testing "should push constants to stack"
-    (is (= "test" (interpret '((defstackfn name [] 1 "test")
-                               (name))))))
-
-  (testing "should work with variables"
-    (is (nil? (interpret '((defstackfn name [!a !b])
-                           (name 1 2))))))
-
-  (testing "should push variable to stack"
-    (is (= 2 (interpret '((defstackfn name [!a] !a)
-                          (name 2))))))
-
-  (testing "should shadow variable"
-    (is (= 200 (interpret '((defstackfn name [!a]
-                                        100
-                                        !a+
-                                        !a
-                                        (invoke> + 2))
-                            (name 2))))))
-
-  (testing "should invoke clojure multiplication"
-    (is (= 4 (interpret '((defstackfn name [!a] !a !a (invoke> * 2))
-                          (name 2))))))
-
-  (testing "should execute pop"
-    (is (= 100 (interpret '((defstackfn name [!a] !a !a <pop> <pop> 100)
-                            (name 2))))))
-
-  (testing "should execute if branch"
-    (is (= "hi" (interpret '((defstackfn f [] true (if> "hi" else> "bye"))
-                             (f))))))
-
-  (testing "should execute else branch"
-    (is (= "bye" (interpret '((defstackfn f [] false (if> "hi" else> "bye"))
-                              (f))))))
-
-  (testing "should execute nested ifs"
-    (is (= "_second_" (interpret '((defstackfn f []
-                                               true
-                                               (if>
-                                                 "hi"
-                                                 (if>
-                                                   "_"
-                                                   "second"
-                                                   "_"
-                                                   (invoke> str 3))
-                                                 else> "bye"))
-                                   (f))))))
-
-  (testing "should execute when no else"
-    (is (= nil (interpret '((defstackfn f []
-                                        false
-                                        (if>
-                                          "lol"))
-                            (f))))))
-
-  (testing "should fail when else without if"
-    (is (thrown? ExceptionInfo
-                 (interpret '((defstackfn f []
-                                          false
-                                          else>
-                                          "lol")
-                              (f))))))
-
-  (testing "should allow nested functions"
-    (is (= 101
-           (interpret '((defstackfn const1 [] 1)
-                        (defstackfn sum [!a !b] !a !b (invoke> + 2))
-                        (defstackfn func []
-                                    100
-                                    (invoke> const1 0)
-                                    (invoke> sum 2))
-                        (func))))))
-
-  (testing "should disallow anonymous functions"
-    (is (thrown? ExceptionInfo
-                 (interpret '((defstackfn f []
-                                          true
-                                          (invoke> #(str "_" % "_") 1))
-                              (f))))))
-
-  (testing "should fail when calling non existent function"
-    (is (thrown? ExceptionInfo
-                 (interpret '((defstackfn func []
-                                          (invoke> println 3))
-                              (f))))))
-
-  (testing "should fail when calling non existent variable"
-    (is (thrown? ExceptionInfo
-                 (interpret '((defstackfn f [!a]
-                                          !a
-                                          !b)
-                              (f 100))))))
-
-  (testing "should fail when calling non existent operation"
-    (is (thrown? ExceptionInfo
-                 (interpret '((defstackfn f [!a]
-                                          <some>
-                                          !b)
-                              (f 100))))))
-
-  (testing "should fail when calling non existent function"
-    (is (thrown? ExceptionInfo
-                 (interpret '((defstackfn f []
-                                          (invoke> not-existing 3))
-                              (f))))))
-
-  (testing "should fail if invalid arg count for invoke"
-    (is (thrown? ExceptionInfo
-                 (interpret '((defstackfn f []
-                                          (invoke> println 3))
-                              (f))))))
-
-  (testing "should fail if invalid arg count for function"
-    (is (thrown? ExceptionInfo
-                 (interpret '((defstackfn f [] 1)
-                              (f 10 10))))))
+(deftest pop-tests
+  (testing "should pop"
+    (defstackfn >second [!a !b] !a <pop> !b)
+    (is (= "second" (>second "first" "second"))))
 
   (testing "should fail if pop when empty"
-    (is (thrown? ExceptionInfo
-                 (interpret '((defstackfn f [] <pop>)
-                              (f))))))
+    (defstackfn >nil [] 1 <pop>)
+    (is (= :defstackfn.core/nil (>nil))))
 
+  (testing "should fail if pop when empty"
+    (defstackfn >invalid [] <pop>)
+    (is (thrown? ExceptionInfo (>invalid)))))
+
+(deftest invoke-tests
+  (testing "should invoke function and return its value"
+    (defstackfn >sum [!a !b] !a !b (invoke> + 2))
+    (is (= 16 (>sum 8 8))))
+
+  (testing "should invoke other defstackfn function"
+    (defstackfn const1 [] 1)
+    (defstackfn >inc [!a]
+                (invoke> const1 0)
+                !a
+                (invoke> + 2))
+    (is (= 2 (>inc 1))))
+
+  (testing "should fail if invalid arg count for invoke"
+    (defstackfn >tuple [!a !b]
+                !b
+                !a
+                (invoke> vector 3))
+    (is (thrown-with-msg?
+          ExceptionInfo
+          #"\(invoke> vector 3\)"
+          (>tuple 1 2)))))
+
+(deftest var-define-tests
+  (testing "should support var define"
+    (defstackfn >mul4 [!a]
+                !a
+                !a
+                (invoke> + 2)
+                !b+
+                !b
+                (invoke> + 2))
+    (is (= 8 (>mul4 2))))
+
+  (testing "should shadow function args"
+    (defstackfn >const100 [!a]
+                !a
+                100
+                !a+
+                !a)
+    (is (= 100 (>const100 2))))
+
+  (testing "should shadow function args inside if"
+    (defstackfn >const100 [!a]
+                !a
+                (if> 100 !a+)
+                !a)
+    (is (= 100 (>const100 2)))))
+
+(deftest if-tests
+  (testing "should fail if empty stack"
+    (defstackfn >if-fail []
+                (if> "if-branch" else> "else-branch"))
+    (is (thrown? ExceptionInfo (= "if-branch" (>if-fail)))))
+
+  (testing "should invoke if branch"
+    (defstackfn >eq [!a !b]
+                !a
+                !b
+                (invoke> = 2)
+                (if> "if-branch" else> "else-branch"))
+    (is (= "if-branch" (>eq 8 8))))
+
+  (testing "should invoke else branch"
+    (defstackfn >eq [!a !b]
+                !a
+                !b
+                (invoke> = 2)
+                (if> "if-branch" else> "else-branch"))
+    (is (= "else-branch" (>eq 8 10))))
+
+  (testing "should support nested ifs"
+    (defstackfn >even-and-pos [!a]
+                !a
+                !a
+                (invoke> even? 1)
+                (if>
+                  (invoke> pos? 1)
+                  (if> true else> false)
+                  else>
+                  false))
+    (is (= true (>even-and-pos 10)))
+    (is (= false (>even-and-pos -10)))
+    (is (= false (>even-and-pos 1)))))
+
+(deftest error-handling-tests
+  (testing "should fail if invalid arg count"
+    (defstackfn >tuple [!a !b]
+                !b
+                !a
+                (invoke> vector 2))
+    (is (thrown? ArityException (>tuple 1)))))
+
+(deftest integration-test
   (testing "base case"
-    (is (= 24
-           (interpret
-             '((defstackfn f [!a !b !c]
-                           !a
-                           !b
-                           (invoke> + 2)
-                           !v1+
-                           !c
-                           !c
-                           <pop>
-                           2
-                           (invoke> * 2)
-                           !v2+
-                           (invoke> = 2)
-                           (if>
-                             !v1
-                             !v2
-                             (invoke> - 2)
-                             else>
-                             "false!!"
-                             (invoke> println 1)
-                             <pop>
-                             !v1
-                             !v2
-                             (invoke> * 2)))
-               (f 1 2 4)))))))
+    (defstackfn f [!a !b !c]
+                !a
+                !b
+                (invoke> + 2)
+                !v1+
+                !c
+                !c
+                <pop>
+                2
+                (invoke> * 2)
+                !v2+
+                (invoke> = 2)
+                (if>
+                  !v1
+                  !v2
+                  (invoke> - 2)
+                  else>
+                  "false!!"
+                  (invoke> println 1)
+                  <pop>
+                  !v1
+                  !v2
+                  (invoke> * 2)))
+    (is (= 24 (f 1 2 4)))))
+
+
+(deftest errors-test
+  ; uncomment to check error message
+  #_(defstackfn >unknown [] <pop> <test>)
+
+  (testing "check error message"
+    (defstackfn >tuple [!a !b]
+                !b
+                !a
+                (invoke> vector 3))
+    (try
+      (>tuple 1 2)
+      (catch Exception e
+        (is (= (cstr/join
+                 \newline
+                 [""
+                  "Failed to invoke: >tuple {!a 1, !b 2}"
+                  "!b"
+                  "!a"
+                  "(invoke> vector 3)"
+                  "^^^^^^^^"
+                  "Stack exhausted, expected to have 3 arguments, was 2"])
+               (.getMessage e)))))))
