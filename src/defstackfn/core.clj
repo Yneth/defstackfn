@@ -156,11 +156,11 @@
         (rest exp)
 
         if-statements
-        (to-statements
+        (do-to-statements
           (take-while #(not= 'else> %) body))
 
         else-statements
-        (to-statements
+        (do-to-statements
           (drop 1 (drop-while #(not= 'else> %) body)))]
 
     `(fn [state#]
