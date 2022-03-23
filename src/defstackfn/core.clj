@@ -74,7 +74,8 @@
   `(fn [state#]
      (let [head# (state->get-stack-head state#)]
        (when (= ::nil head#)
-         (throw (ex-info "Failed to pop empty stack" {:exp '~exp :opts '~opts}))))
+         (throw (ex-info "Failed to pop empty stack"
+                         {:exp '~exp :opts '~opts :state state#}))))
 
      (state->stack-pop state#)))
 
@@ -108,6 +109,11 @@
 
 (defmethod list->statement 'invoke> [exp opts]
   (let [[_ f arg-count] exp]
+    (when-not (symbol? f)
+      (throw (ex-info (str "invalid function name: " f) {:exp exp :opts opts})))
+    (when-not (and arg-count (or (zero? arg-count) (pos-int? arg-count)))
+      (throw (ex-info (str "invalid arg count: " arg-count) {:exp exp :opts opts})))
+
     `(fn [state#]
        (let [args#          (state->stack-take state# ~arg-count)
              updated-state# (state->stack-pop-multi state# ~arg-count)
@@ -115,7 +121,7 @@
          (when (< (count args#) ~arg-count)
            (throw (ex-info (str "Stack exhausted, expected to have " ~arg-count
                                 " arguments, was " (count args#))
-                           {:exp '~exp :opts '~opts})))
+                           {:exp '~exp :opts '~opts :state state#})))
          (state->stack-push updated-state# result#)))))
 
 (defn ->logging-statement [exp opts]
@@ -140,7 +146,7 @@
 (defn to-statements [s-exp-list]
   (when (macro-debug-enabled)
     (println "unfold started"))
-  (let [result (do-to-statements s-exp-list)]
+  (let [result (doall (do-to-statements s-exp-list))]
     (when (macro-debug-enabled)
       (println "unfold completed"))
     result))
@@ -165,8 +171,8 @@
              (state->stack-pop state#)]
          (cond
            (= ::nil stack-head#)
-           (throw (ex-info "Failed to execute if, empty stack"
-                           {:exp '~exp :opts '~opts}))
+           (throw (ex-info "Failed to execute if>, empty stack"
+                           {:exp '~exp :opts '~opts :state state#}))
 
            stack-head#
            (-> updated-state#
@@ -176,20 +182,25 @@
            (-> updated-state#
                ~@else-statements))))))
 
-(defn format-exception-message [header-message name args-map-or-list ^Exception e]
-  (let [{:keys [exp opts]}
+(defn format-exception-message
+  [header-message function-name args-map-or-list ^Exception e]
+  (let [{:keys [exp opts state]}
         (ex-data e)
 
         history
         (get opts :history)
 
         header
-        (str header-message name " " args-map-or-list)
+        (str header-message function-name " " args-map-or-list)
 
         footer
-        (str exp \newline
-             "^^^^^^^^" \newline
-             (.getMessage e))
+        (cond->
+          (str exp \newline
+               "^^^^^^^^" \newline
+               (.getMessage e) \newline)
+
+          state
+          (str "State: " state))
 
         message
         (cstr/join

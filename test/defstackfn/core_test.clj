@@ -164,6 +164,8 @@
 (deftest errors-test
   ; uncomment to check error message
   #_(defstackfn >unknown [] <pop> <test>)
+  #_(defstackfn >no-fn-name [] (invoke>))
+  #_(defstackfn >no-arg-count [] (invoke> ff))
 
   (testing "check error message"
     (defstackfn >tuple [!a !b]
@@ -181,5 +183,6 @@
                   "!a"
                   "(invoke> vector 3)"
                   "^^^^^^^^"
-                  "Stack exhausted, expected to have 3 arguments, was 2"])
+                  "Stack exhausted, expected to have 3 arguments, was 2"
+                  "State: {:stack (1 2), :vars {!a 1, !b 2}}"])
                (.getMessage e)))))))
