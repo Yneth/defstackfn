@@ -197,10 +197,10 @@
         (cond->
           (str exp \newline
                "^^^^^^^^" \newline
-               (.getMessage e) \newline)
+               (.getMessage e))
 
           state
-          (str "State: " state))
+          (str \newline "State: " state))
 
         message
         (cstr/join

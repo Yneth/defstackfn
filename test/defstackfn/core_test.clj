@@ -162,11 +162,6 @@
 
 
 (deftest errors-test
-  ; uncomment to check error message
-  #_(defstackfn >unknown [] <pop> <test>)
-  #_(defstackfn >no-fn-name [] (invoke>))
-  #_(defstackfn >no-arg-count [] (invoke> ff))
-
   (testing "check error message"
     (defstackfn >tuple [!a !b]
                 !b
@@ -185,4 +180,48 @@
                   "^^^^^^^^"
                   "Stack exhausted, expected to have 3 arguments, was 2"
                   "State: {:stack (1 2), :vars {!a 1, !b 2}}"])
-               (.getMessage e)))))))
+               (.getMessage e))))))
+
+  ; uncomment to check error message
+  (testing "format unknown symbol error"
+    #_(defstackfn >unknown [] <pop> <test>)
+    (is (= (cstr/join
+             \newline
+             [""
+              "Failed to compile: >unknown []"
+              "<pop>"
+              "<test>"
+              "^^^^^^^^"
+              "Found invalid symbol: <test>"])
+           (format-exception-message
+             "Failed to compile: " '>unknown '[]
+             (ex-info "Found invalid symbol: <test>"
+                      {:exp '<test> :opts {:history ['<pop>]}})))))
+
+  (testing "format no-fn-name"
+    #_(defstackfn >no-fn-name [] (invoke>))
+    (is (= (cstr/join
+             \newline
+             [""
+              "Failed to compile: >no-fn-name []"
+              "(invoke>)"
+              "^^^^^^^^"
+              "invalid function name: "])
+           (format-exception-message
+             "Failed to compile: " '>no-fn-name '[]
+             (ex-info "invalid function name: "
+                      {:exp '(invoke>) :opts {:history []}})))))
+
+  (testing "format no-fn-name"
+    #_(defstackfn >no-arg-count [] (invoke> ff))
+    (is (= (cstr/join
+             \newline
+             [""
+              "Failed to compile: >no-arg-count []"
+              "(invoke>)"
+              "^^^^^^^^"
+              "invalid arg count: "])
+           (format-exception-message
+             "Failed to compile: " '>no-arg-count '[]
+             (ex-info "invalid arg count: "
+                      {:exp '(invoke>) :opts {:history []}}))))))
