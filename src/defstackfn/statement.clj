@@ -140,14 +140,15 @@
     result))
 
 (defmethod list->statement 'if> [exp opts]
-  (let [body (rest exp)
+  (let [body
+        (rest exp)
 
         [if-statements _ else-statements]
         (partition-by #(not= 'else> %) body)
 
         stack-pop-stmt
         (StackPopStatement. exp opts)]
-    `(fn [state#]
+    `(fn [^State state#]
        (when (state/stack-empty? state#)
          (throw (ex-info "Failed to execute if>, empty stack"
                          {:exp '~exp :opts '~opts :state state#})))
