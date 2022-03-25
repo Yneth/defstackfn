@@ -1,8 +1,7 @@
 (ns defstackfn.core
-  (:require [clojure.test :refer :all]
-            [clojure.string :as cstr]
+  (:require [clojure.string :as cstr]
             [defstackfn.util :as util])
-  (:import (clojure.lang Symbol IPersistentCollection ExceptionInfo)))
+  (:import (clojure.lang Symbol ExceptionInfo IPersistentList IPersistentMap)))
 
 (defonce macro-debug-enabled
   (util/mk-thread-local false))
@@ -10,14 +9,19 @@
 (defonce runtime-debug-enabled
   (util/mk-thread-local false))
 
-(defn state->stack-push [state val]
+(defrecord State [^IPersistentList stack ^IPersistentMap vars]
+  Object
+  (toString [this]
+    (str "{:stack " stack ", :vars " vars "}")))
+
+(defn ^State state->stack-push [^State state val]
   (update state :stack
     (fn [stack]
       (if (= ::nil stack)
         (list val)
         (conj stack val)))))
 
-(defn state->stack-pop [state]
+(defn ^State state->stack-pop [^State state]
   (update state :stack
     (fn [stack]
       (cond
@@ -30,47 +34,47 @@
         :else
         (rest stack)))))
 
-(defn state->stack-pop-multi [state n]
+(defn ^State state->stack-pop-multi [^State state n]
   (reduce
     (fn [acc _]
       (state->stack-pop acc))
     state
     (range n)))
 
-(defn state->stack-take [state n]
+(defn ^IPersistentList state->stack-take [^State state n]
   (let [stack (get state :stack)]
     (if (= ::nil stack)
       (list)
       (take n stack))))
 
-(defn state->get-stack-head [state]
+(defn ^Object state->get-stack-head [^State state]
   (let [stack (get state :stack)]
     (if (= ::nil stack)
       stack
       (first stack))))
 
-(defn state->get-var [state var-name]
+(defn ^Object state->get-var [^State state ^Symbol var-name]
   (get-in state [:vars var-name] ::nil))
 
-(defn state->define-var [state var-name]
+(defn ^State state->define-var [^State state ^Symbol var-name]
   (let [var-value (state->get-stack-head state)]
     (update state :vars assoc var-name var-value)))
 
 (defmulti ->statement (fn [exp opts] (class exp)))
-(defmulti symbol->statement (fn [exp opts] exp))
-(defmulti list->statement (fn [exp opts] (first exp)))
+(defmulti symbol->statement (fn [^Symbol exp opts] exp))
+(defmulti list->statement (fn [^IPersistentList exp opts] (first exp)))
 
 (defmethod ->statement Symbol [exp opts]
   (symbol->statement exp opts))
 
-(defmethod ->statement IPersistentCollection [exp opts]
+(defmethod ->statement IPersistentList [exp opts]
   (list->statement exp opts))
 
 (defmethod ->statement :default [exp opts]
   `(fn [state#]
      (state->stack-push state# ~exp)))
 
-(defmethod symbol->statement '<pop> [exp opts]
+(defmethod symbol->statement '<pop> [^Symbol exp opts]
   `(fn [state#]
      (let [head# (state->get-stack-head state#)]
        (when (= ::nil head#)
@@ -79,22 +83,22 @@
 
      (state->stack-pop state#)))
 
-(defn define-var? [sym]
+(defn define-var? [^Symbol sym]
   (let [n (name sym)]
     (and
       (cstr/starts-with? n "!")
       (cstr/ends-with? n "+"))))
 
-(defn push-var? [sym]
+(defn push-var? [^Symbol sym]
   (and
     (cstr/starts-with? (name sym) "!")
     (not (define-var? sym))))
 
-(defn format-var [sym]
+(defn format-var [^Symbol sym]
   (let [n (name sym)]
     (symbol (subs n 0 (dec (count n))))))
 
-(defmethod symbol->statement :default [exp opts]
+(defmethod symbol->statement :default [^Symbol exp opts]
   (when-not (or (push-var? exp) (define-var? exp))
     (throw (ex-info (str "Found invalid symbol: " exp) {:exp exp :opts opts})))
 
@@ -190,7 +194,7 @@
                ~@else-statements))))))
 
 (defn format-exception-message
-  [header-message function-name args-map-or-list ^Exception e]
+  [^String header-message ^Symbol function-name args-map-or-list ^Exception e]
   (let [{:keys [exp opts state]}
         (ex-data e)
 
@@ -219,10 +223,10 @@
             [footer]))]
     message))
 
-(defn format-runtime-exception [name args-map ^ExceptionInfo e]
+(defn format-runtime-exception [^Symbol name ^IPersistentMap args-map ^ExceptionInfo e]
   (ex-info (format-exception-message "Failed to invoke: " name args-map e) {} e))
 
-(defn format-compile-exception [name args ^ExceptionInfo e]
+(defn format-compile-exception [^Symbol name ^IPersistentList args ^ExceptionInfo e]
   (ex-info (format-exception-message "Failed to compile: " name args e) {}))
 
 (defmacro defstackfn [& body]
@@ -232,8 +236,7 @@
          (let [args-map# (zipmap '~args ~args)]
            (try
              (->
-               {:stack ::nil
-                :vars  args-map#}
+               (State. ::nil args-map#)
                ~@(to-statements s-exps)
                (state->get-stack-head))
              (catch ExceptionInfo e#
