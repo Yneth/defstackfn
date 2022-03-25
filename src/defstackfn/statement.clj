@@ -133,12 +133,6 @@
                (log/macro-debug-enabled)
                (conj (seq [(LoggingStatement. exp# opts#)]))))))))
 
-(defn to-statements [s-exp-list]
-  (when (log/macro-debug-enabled) (timbre/debug "unfold started"))
-  (let [result (doall (do-to-statements s-exp-list))]
-    (when (log/macro-debug-enabled) (timbre/debug "unfold completed"))
-    result))
-
 (defmethod list->statement 'if> [exp opts]
   (let [body
         (rest exp)
@@ -157,3 +151,9 @@
          (-> state# (~stack-pop-stmt) ~@(do-to-statements if-statements))
          #_:else
          (-> state# (~stack-pop-stmt) ~@(do-to-statements else-statements))))))
+
+(defn to-statements [s-exp-list]
+  (when (log/macro-debug-enabled) (timbre/debug "unfold started"))
+  (let [result (doall (do-to-statements s-exp-list))]
+    (when (log/macro-debug-enabled) (timbre/debug "unfold completed"))
+    result))
