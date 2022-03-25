@@ -77,7 +77,7 @@
   Statement
   (invoke [_ state]
     (when (log/runtime-debug-enabled)
-      (timbre/debug exp state opts))
+      (timbre/info exp state opts))
     state))
 
 (defmulti ->statement (fn [exp opts] (class exp)))
@@ -133,7 +133,7 @@
               (cond->
                 [(seq [(->statement exp# opts#)])]
 
-                (log/macro-debug-enabled)
+                (log/runtime-debug-enabled)
                 (conj (seq [(LoggingStatement. exp# opts#)])))))))))
 
 (defmethod list->statement 'if> [exp opts]
