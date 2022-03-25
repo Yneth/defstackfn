@@ -1,11 +1,13 @@
 (ns defstackfn.core-test
   (:require [clojure.test :refer :all]
             [defstackfn.core :refer :all]
-            [clojure.string :as cstr])
+            [clojure.string :as cstr]
+            [defstackfn.error :as error]
+            [defstackfn.log :as log])
   (:import (clojure.lang ArityException ExceptionInfo)))
 
-;(macro-debug-enabled :set false)
-;(runtime-debug-enabled :set false)
+;(log/macro-debug-enabled :set true)
+;(log/runtime-debug-enabled :set true)
 
 (deftest literal-tests
   (testing "should return const head"
@@ -35,7 +37,7 @@
 
   (testing "should fail if pop when empty"
     (defstackfn >nil [] 1 <pop>)
-    (is (= :defstackfn.core/nil (>nil))))
+    (is (= :defstackfn.state/nil (>nil))))
 
   (testing "should fail if pop when empty"
     (defstackfn >invalid [] <pop>)
@@ -141,7 +143,7 @@
     (is (thrown? ArityException (>tuple 1))))
 
   (testing "should fail if missing variable usage"
-    (defstackfn >invalid-var [] !unknown )
+    (defstackfn >invalid-var [] !unknown)
     (is (thrown-with-msg?
           ExceptionInfo
           #"Unknown variable: !unknown"
@@ -176,6 +178,17 @@
 
 
 (deftest errors-test
+  (testing "non standard exception rethrown"
+    (defn throw-custom []
+      (throw (RuntimeException. "CUSTOM")))
+    (defstackfn >throw-custom []
+                (invoke> throw-custom 0))
+
+    (is (thrown-with-msg?
+          RuntimeException
+          #"CUSTOM"
+          (>throw-custom))))
+
   (testing "check error message"
     (defstackfn >tuple [!a !b]
                 !b
@@ -205,7 +218,7 @@
               "(invokekkee> [])"
               "^^^^^^^^"
               "Found invalid symbol: invokekkee>"])
-           (format-exception-message
+           (error/format-exception-message
              "Failed to compile: " '>unknown-list '[]
              (ex-info "Found invalid symbol: invokekkee>"
                       {:exp '(invokekkee> []) :opts {:history []}})))))
@@ -221,7 +234,7 @@
               "<test>"
               "^^^^^^^^"
               "Found invalid symbol: <test>"])
-           (format-exception-message
+           (error/format-exception-message
              "Failed to compile: " '>unknown '[]
              (ex-info "Found invalid symbol: <test>"
                       {:exp '<test> :opts {:history ['<pop>]}})))))
@@ -235,7 +248,7 @@
               "(invoke>)"
               "^^^^^^^^"
               "invalid function name: "])
-           (format-exception-message
+           (error/format-exception-message
              "Failed to compile: " '>no-fn-name '[]
              (ex-info "invalid function name: "
                       {:exp '(invoke>) :opts {:history []}})))))
@@ -249,7 +262,7 @@
               "(invoke>)"
               "^^^^^^^^"
               "invalid arg count: "])
-           (format-exception-message
+           (error/format-exception-message
              "Failed to compile: " '>no-arg-count '[]
              (ex-info "invalid arg count: "
                       {:exp '(invoke>) :opts {:history []}}))))))
