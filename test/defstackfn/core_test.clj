@@ -176,7 +176,6 @@
                   (invoke> * 2)))
     (is (= 24 (f 1 2 4)))))
 
-
 (deftest errors-test
   (testing "non standard exception rethrown"
     (defn throw-custom []

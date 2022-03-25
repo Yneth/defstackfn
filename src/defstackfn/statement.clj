@@ -8,7 +8,7 @@
            (defstackfn.state State)))
 
 (defprotocol Statement
-  (invoke [this state]))
+  (invoke [this ^State state]))
 
 (deftype StackPopStatement [exp opts]
   IFn
@@ -71,36 +71,6 @@
                              " arguments, was " (count args))
                         {:exp exp :opts opts :state state})))
       (state/stack-push updated-state (apply f args)))))
-
-(deftype NestedStatements [exp opts statements]
-  IFn
-  Statement
-  (invoke [_ state]
-    (reduce
-      (fn [^State state [stmt]]
-        (stmt state))
-      state
-      statements)))
-
-(deftype IfStatement [exp opts if-statements else-statements]
-  IFn
-  Statement
-  (invoke [_ state]
-    (let [stack-head
-          (state/get-stack-head state)
-
-          updated-state
-          (state/stack-pop state)]
-      (cond
-        (state/stack-empty? state)
-        (throw (ex-info "Failed to execute if>, empty stack"
-                        {:exp exp :opts opts :state state}))
-
-        stack-head
-        ((NestedStatements. exp opts if-statements) updated-state)
-
-        :else
-        ((NestedStatements. exp opts else-statements) updated-state)))))
 
 (deftype LoggingStatement [exp opts]
   IFn
@@ -170,15 +140,19 @@
     result))
 
 (defmethod list->statement 'if> [exp opts]
-  (let [body
-        (rest exp)
+  (let [body (rest exp)
 
-        if-statements
-        (do-to-statements
-          (take-while #(not= 'else> %) body))
+        [if-statements _ else-statements]
+        (partition-by #(not= 'else> %) body)
 
-        else-statements
-        (do-to-statements
-          (drop 1 (drop-while #(not= 'else> %) body)))]
+        stack-pop-stmt
+        (StackPopStatement. exp opts)]
+    `(fn [state#]
+       (when (state/stack-empty? state#)
+         (throw (ex-info "Failed to execute if>, empty stack"
+                         {:exp '~exp :opts '~opts :state state#})))
 
-    (IfStatement. exp opts if-statements else-statements)))
+       (if (state/get-stack-head state#)
+         (-> state# (~stack-pop-stmt) ~@(do-to-statements if-statements))
+         #_:else
+         (-> state# (~stack-pop-stmt) ~@(do-to-statements else-statements))))))
