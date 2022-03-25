@@ -121,17 +121,20 @@
   (throw (ex-info (str "unknown list exp: " (first exp))
                   {:exp exp :opts opts})))
 
-(defn do-to-statements [s-exp-list]
-  (->> s-exp-list
-       (util/scan)
-       (mapcat
-         (fn [[exp# history#]]
-           (let [opts# {:history history#}]
-             (cond->
-               [(seq [(->statement exp# opts#)])]
+(defn do-to-statements
+  ([s-exp-list]
+   (do-to-statements s-exp-list []))
+  ([s-exp-list par-history]
+   (->> s-exp-list
+        (util/scan)
+        (mapcat
+          (fn [[exp# history#]]
+            (let [opts# {:history (concat par-history history#)}]
+              (cond->
+                [(seq [(->statement exp# opts#)])]
 
-               (log/macro-debug-enabled)
-               (conj (seq [(LoggingStatement. exp# opts#)]))))))))
+                (log/macro-debug-enabled)
+                (conj (seq [(LoggingStatement. exp# opts#)])))))))))
 
 (defmethod list->statement 'if> [exp opts]
   (let [body
@@ -141,16 +144,19 @@
         (partition-by #(not= 'else> %) body)
 
         stack-pop-stmt
-        (StackPopStatement. exp opts)]
+        (StackPopStatement. exp opts)
+
+        history
+        (:history opts)]
     `(fn [^State state#]
        (when (state/stack-empty? state#)
          (throw (ex-info "Failed to execute if>, empty stack"
                          {:exp '~exp :opts '~opts :state state#})))
 
        (if (state/get-stack-head state#)
-         (-> state# (~stack-pop-stmt) ~@(do-to-statements if-statements))
+         (-> state# (~stack-pop-stmt) ~@(do-to-statements if-statements history))
          #_:else
-         (-> state# (~stack-pop-stmt) ~@(do-to-statements else-statements))))))
+         (-> state# (~stack-pop-stmt) ~@(do-to-statements else-statements history))))))
 
 (defn to-statements [s-exp-list]
   (when (log/macro-debug-enabled) (timbre/debug "unfold started"))
