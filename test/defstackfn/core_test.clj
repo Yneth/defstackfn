@@ -4,7 +4,8 @@
             [clojure.string :as cstr])
   (:import (clojure.lang ArityException ExceptionInfo)))
 
-; (runtime-debug-enabled :set true)
+;(macro-debug-enabled :set false)
+;(runtime-debug-enabled :set false)
 
 (deftest literal-tests
   (testing "should return const head"
@@ -38,7 +39,10 @@
 
   (testing "should fail if pop when empty"
     (defstackfn >invalid [] <pop>)
-    (is (thrown? ExceptionInfo (>invalid)))))
+    (is (thrown-with-msg?
+          ExceptionInfo
+          #"Failed to pop empty stack"
+          (>invalid)))))
 
 (deftest invoke-tests
   (testing "should invoke function and return its value"
@@ -93,7 +97,10 @@
   (testing "should fail if empty stack"
     (defstackfn >if-fail []
                 (if> "if-branch" else> "else-branch"))
-    (is (thrown? ExceptionInfo (= "if-branch" (>if-fail)))))
+    (is (thrown-with-msg?
+          ExceptionInfo
+          #"Failed to execute if>, empty stack"
+          (= "if-branch" (>if-fail)))))
 
   (testing "should invoke if branch"
     (defstackfn >eq [!a !b]
@@ -131,7 +138,14 @@
                 !b
                 !a
                 (invoke> vector 2))
-    (is (thrown? ArityException (>tuple 1)))))
+    (is (thrown? ArityException (>tuple 1))))
+
+  (testing "should fail if missing variable usage"
+    (defstackfn >invalid-var [] !unknown )
+    (is (thrown-with-msg?
+          ExceptionInfo
+          #"Unknown variable: !unknown"
+          (>invalid-var)))))
 
 (deftest integration-test
   (testing "base case"
@@ -182,6 +196,20 @@
                   "State: {:stack (1 2), :vars {!a 1, !b 2}}"])
                (.getMessage e))))))
 
+  (testing "should fail if unknown list expression"
+    #_(defstackfn >unknown-list [] (invokekkee> []))
+    (is (= (cstr/join
+             \newline
+             [""
+              "Failed to compile: >unknown-list []"
+              "(invokekkee> [])"
+              "^^^^^^^^"
+              "Found invalid symbol: invokekkee>"])
+           (format-exception-message
+             "Failed to compile: " '>unknown-list '[]
+             (ex-info "Found invalid symbol: invokekkee>"
+                      {:exp '(invokekkee> []) :opts {:history []}})))))
+
   ; uncomment to check error message
   (testing "format unknown symbol error"
     #_(defstackfn >unknown [] <pop> <test>)
@@ -212,7 +240,7 @@
              (ex-info "invalid function name: "
                       {:exp '(invoke>) :opts {:history []}})))))
 
-  (testing "format no-fn-name"
+  (testing "format no-arg-count"
     #_(defstackfn >no-arg-count [] (invoke> ff))
     (is (= (cstr/join
              \newline

@@ -50,7 +50,7 @@
       (first stack))))
 
 (defn state->get-var [state var-name]
-  (get-in state [:vars var-name]))
+  (get-in state [:vars var-name] ::nil))
 
 (defn state->define-var [state var-name]
   (let [var-value (state->get-stack-head state)]
@@ -105,7 +105,10 @@
 
     (push-var? exp)
     `(fn [state#]
-       (state->stack-push state# (state->get-var state# '~exp)))))
+       (let [var-value# (state->get-var state# '~exp)]
+         (when (= ::nil var-value#)
+           (throw (ex-info (str "Unknown variable: " '~exp) {:exp '~exp :opts '~opts})))
+         (state->stack-push state# var-value#)))))
 
 (defmethod list->statement 'invoke> [exp opts]
   (let [[_ f arg-count] exp]
@@ -124,6 +127,10 @@
                            {:exp '~exp :opts '~opts :state state#})))
          (state->stack-push updated-state# result#)))))
 
+(defmethod list->statement :default [exp opts]
+  (throw (ex-info (str "unknown list exp: " (first exp))
+                  {:exp exp :opts opts})))
+
 (defn ->logging-statement [exp opts]
   `(fn [state#]
      (println '~exp state# '~opts)
@@ -136,7 +143,7 @@
          (fn [[exp# history#]]
            (let [opts# {:history history#}]
              (when (macro-debug-enabled)
-               (println "unfolding statement:" exp# \newline history#))
+               (println "unfolding statement:" exp#))
 
              (cond-> [(seq [(->statement exp# opts#)])]
 
