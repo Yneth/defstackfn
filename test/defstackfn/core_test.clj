@@ -142,6 +142,13 @@
                 (invoke> vector 2))
     (is (thrown? ArityException (>tuple 1))))
 
+  (testing "should fail if non existing function used"
+    (defstackfn >invalid-fn [] (invoke> non-existent 0))
+    (is (thrown-with-msg?
+          ExceptionInfo
+          #"No such function found: non-existent"
+          (>invalid-fn))))
+
   (testing "should fail if missing variable usage"
     (defstackfn >invalid-var [] !unknown)
     (is (thrown-with-msg?
@@ -180,6 +187,17 @@
   (testing "non standard exception rethrown"
     (defn throw-custom []
       (throw (RuntimeException. "CUSTOM")))
+    (defstackfn >throw-custom []
+                (invoke> throw-custom 0))
+
+    (is (thrown-with-msg?
+          RuntimeException
+          #"CUSTOM"
+          (>throw-custom))))
+
+  (testing "non standard exception rethrown exception-info"
+    (defn throw-custom []
+      (throw (ex-info "CUSTOM" {})))
     (defstackfn >throw-custom []
                 (invoke> throw-custom 0))
 

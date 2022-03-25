@@ -20,13 +20,11 @@
     (state/stack-pop state)))
 
 (deftype StackPushLiteralStatement [exp opts]
-  IFn
   Statement
   (invoke [_ state]
     (state/stack-push state exp)))
 
 (deftype StackPushVarStatement [exp opts]
-  IFn
   Statement
   (invoke [_ state]
     (let [var-value (state/get-var state exp ::nil)]
@@ -50,20 +48,18 @@
     (symbol (subs n 0 (dec (count n))))))
 
 (deftype DefineVarStatement [exp opts]
-  IFn
   Statement
   (invoke [_ state]
     (state/define-var state (format-var exp))))
 
 (deftype InvokeStatement [exp opts f arg-count]
-  IFn
   Statement
   (invoke [_ state]
     (let [args          (state/stack-take state arg-count)
           updated-state (state/stack-pop-multi state arg-count)]
 
       (when-not f
-        (throw (ex-info (str "No such function fount: " f)
+        (throw (ex-info (str "No such function found: " (second exp))
                         {:exp exp :opts opts :state state})))
 
       (when (< (count args) arg-count)
@@ -72,8 +68,27 @@
                         {:exp exp :opts opts :state state})))
       (state/stack-push updated-state (apply f args)))))
 
+(deftype Statements [stmts]
+  Statement
+  (invoke [_ state]
+    (reduce
+      (fn [^State acc stmt]
+        (.invoke stmt acc))
+      state
+      stmts)))
+
+(deftype IfStatement [exp opts if-statements else-statements]
+  Statement
+  (invoke [_ state]
+    (when (state/stack-empty? state)
+      (throw (ex-info "Failed to execute if>, empty stack"
+                      {:exp exp :opts opts :state state})))
+    (let [updated-state (state/stack-pop state)]
+      (if (state/get-stack-head state)
+        (.invoke if-statements updated-state)
+        (.invoke else-statements updated-state)))))
+
 (deftype LoggingStatement [exp opts]
-  IFn
   Statement
   (invoke [_ state]
     (when (log/runtime-debug-enabled)
@@ -118,8 +133,7 @@
     (InvokeStatement. exp opts (resolve f) arg-count)))
 
 (defmethod list->statement :default [exp opts]
-  (throw (ex-info (str "unknown list exp: " (first exp))
-                  {:exp exp :opts opts})))
+  (throw (ex-info (str "unknown list exp: " (first exp)) {:exp exp :opts opts})))
 
 (defn do-to-statements
   ([s-exp-list]
@@ -129,12 +143,16 @@
         (util/scan)
         (mapcat
           (fn [[exp# history#]]
+            (when (log/macro-debug-enabled)
+              (timbre/debug exp#))
+
             (let [opts# {:history (concat par-history history#)}]
               (cond->
-                [(seq [(->statement exp# opts#)])]
+                [(->statement exp# opts#)]
 
                 (log/runtime-debug-enabled)
-                (conj (seq [(LoggingStatement. exp# opts#)])))))))))
+                (conj (LoggingStatement. exp# opts#))))))
+        (doall))))
 
 (defmethod list->statement 'if> [exp opts]
   (let [body
@@ -143,23 +161,16 @@
         [if-statements _ else-statements]
         (partition-by #(not= 'else> %) body)
 
-        stack-pop-stmt
-        (StackPopStatement. exp opts)
-
         history
         (:history opts)]
-    `(fn [^State state#]
-       (when (state/stack-empty? state#)
-         (throw (ex-info "Failed to execute if>, empty stack"
-                         {:exp '~exp :opts '~opts :state state#})))
-
-       (if (state/get-stack-head state#)
-         (-> state# (~stack-pop-stmt) ~@(do-to-statements if-statements history))
-         #_:else
-         (-> state# (~stack-pop-stmt) ~@(do-to-statements else-statements history))))))
+    (IfStatement.
+      exp
+      opts
+      (Statements. (do-to-statements if-statements history))
+      (Statements. (do-to-statements else-statements history)))))
 
 (defn to-statements [s-exp-list]
   (when (log/macro-debug-enabled) (timbre/debug "unfold started"))
-  (let [result (doall (do-to-statements s-exp-list))]
+  (let [result (do-to-statements s-exp-list)]
     (when (log/macro-debug-enabled) (timbre/debug "unfold completed"))
-    result))
+    (Statements. result)))

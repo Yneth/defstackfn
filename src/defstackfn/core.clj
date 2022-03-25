@@ -5,15 +5,15 @@
   (:import (clojure.lang ExceptionInfo)))
 
 (defmacro defstackfn [& body]
-  (let [[name args & s-exps] body]
+  (let [[name args & s-exps] body
+        result-fn (statement/to-statements s-exps)]
     (try
       `(defn ~name ~args
-         (let [args-map# (zipmap '~args ~args)]
+         (let [args-map# (zipmap '~args ~args)
+               state#    (state/init-state args-map#)]
            (try
-             (->
-               (state/init-state args-map#)
-               ~@(statement/to-statements s-exps)
-               (state/get-stack-head))
+             (-> (.invoke ~result-fn state#)
+                 (state/get-stack-head))
              (catch ExceptionInfo e#
                (throw (error/try-format-runtime-exception '~name args-map# e#))))))
       (catch ExceptionInfo e
