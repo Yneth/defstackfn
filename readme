@@ -1,0 +1,26 @@
+Naive implementation of stackfn language using clojure macro
+
+Language example:
+  (defstackfn f [!a !b !c]
+                  !a
+                  !b
+                  (invoke> + 2)
+                  !v1+
+                  !c
+                  !c
+                  <pop>
+                  2
+                  (invoke> * 2)
+                  !v2+
+                  (invoke> = 2)
+                  (if>
+                    !v1
+                    !v2
+                    (invoke> - 2)
+                    else>
+                    "false!!"
+                    (invoke> println 1)
+                    <pop>
+                    !v1
+                    !v2
+                    (invoke> * 2)))
