@@ -4,14 +4,13 @@
             [defstackfn.util :as util]
             [defstackfn.log :as log]
             [taoensso.timbre :as timbre])
-  (:import (clojure.lang IFn IPersistentList Symbol)
+  (:import (clojure.lang IPersistentList Symbol)
            (defstackfn.state State)))
 
 (defprotocol Statement
   (invoke [this ^State state]))
 
-(deftype StackPopStatement [exp opts]
-  IFn
+(defrecord StackPopStatement [exp opts]
   Statement
   (invoke [_ state]
     (when (state/stack-empty? state)
@@ -19,12 +18,12 @@
                       {:exp exp :opts opts :state state})))
     (state/stack-pop state)))
 
-(deftype StackPushLiteralStatement [exp opts]
+(defrecord StackPushLiteralStatement [exp opts]
   Statement
   (invoke [_ state]
     (state/stack-push state exp)))
 
-(deftype StackPushVarStatement [exp opts]
+(defrecord StackPushVarStatement [exp opts]
   Statement
   (invoke [_ state]
     (let [var-value (state/get-var state exp ::nil)]
@@ -47,12 +46,12 @@
   (let [n (name sym)]
     (symbol (subs n 0 (dec (count n))))))
 
-(deftype DefineVarStatement [exp opts]
+(defrecord DefineVarStatement [exp opts]
   Statement
   (invoke [_ state]
     (state/define-var state (format-var exp))))
 
-(deftype InvokeStatement [exp opts f arg-count]
+(defrecord InvokeStatement [exp opts f arg-count]
   Statement
   (invoke [_ state]
     (let [args          (state/stack-take state arg-count)
@@ -68,7 +67,7 @@
                         {:exp exp :opts opts :state state})))
       (state/stack-push updated-state (apply f args)))))
 
-(deftype Statements [stmts]
+(defrecord Statements [stmts]
   Statement
   (invoke [_ state]
     (reduce
@@ -77,7 +76,7 @@
       state
       stmts)))
 
-(deftype IfStatement [exp opts if-statements else-statements]
+(defrecord IfStatement [exp opts if-statements else-statements]
   Statement
   (invoke [_ state]
     (when (state/stack-empty? state)
@@ -88,7 +87,7 @@
         (.invoke if-statements updated-state)
         (.invoke else-statements updated-state)))))
 
-(deftype LoggingStatement [exp opts]
+(defrecord LoggingStatement [exp opts]
   Statement
   (invoke [_ state]
     (when (log/runtime-debug-enabled)
